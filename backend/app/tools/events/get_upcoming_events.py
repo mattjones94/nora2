@@ -1,0 +1,154 @@
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.v1.admin.departments.repository import (
+    DepartmentRepository,
+)
+from app.api.v1.admin.events.service import EventService
+from app.tools.context import ToolContext
+from app.tools.errors import ToolExecutionError
+
+
+TOOL_NAME = "get_upcoming_events"
+
+TOOL_DESCRIPTION = (
+    "Return active upcoming events for a department "
+    "within the organization assigned to the current conversation."
+)
+
+
+class GetUpcomingEventsArguments(BaseModel):
+    """Arguments the LLM may supply to the upcoming-events tool."""
+
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        extra="forbid",
+    )
+
+    department_slug: str = Field(
+        min_length=1,
+        max_length=100,
+        description=(
+            "The organization-scoped department slug, "
+            "such as 'student-life'."
+        ),
+    )
+
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum number of upcoming events to return.",
+    )
+
+
+class UpcomingEventItem(BaseModel):
+    """One display-safe event returned by the tool."""
+
+    id: int
+    title: str
+    description: str | None
+
+    starts_at: datetime
+    ends_at: datetime | None
+
+    is_all_day: bool
+    timezone: str
+
+    location: str | None
+    event_url: str | None
+
+
+class GetUpcomingEventsResult(BaseModel):
+    """Structured result returned to the conversation system."""
+
+    organization_id: int
+    organization_slug: str
+
+    department_id: int
+    department_name: str
+    department_slug: str
+
+    events: list[UpcomingEventItem]
+
+
+class UpcomingEventsToolError(ToolExecutionError):
+    """Base error raised while executing the upcoming-events tool."""
+
+
+class ToolDepartmentNotFoundError(UpcomingEventsToolError):
+    """Raised when the requested department cannot be resolved."""
+
+    def __init__(self, department_slug: str) -> None:
+        super().__init__(
+            f"Department '{department_slug}' was not found "
+            "within the current organization."
+        )
+
+
+class ToolDepartmentInactiveError(UpcomingEventsToolError):
+    """Raised when the requested department is inactive."""
+
+    def __init__(self, department_slug: str) -> None:
+        super().__init__(
+            f"Department '{department_slug}' is inactive."
+        )
+
+
+async def get_upcoming_events(
+    session: AsyncSession,
+    context: ToolContext,
+    arguments: GetUpcomingEventsArguments,
+) -> GetUpcomingEventsResult:
+    """Retrieve upcoming events using trusted organization scope."""
+
+    department_slug = arguments.department_slug.strip().lower()
+
+    department_repository = DepartmentRepository(session)
+
+    department = await department_repository.get_by_slug(
+        organization_id=context.organization_id,
+        slug=department_slug,
+    )
+
+    if department is None:
+        raise ToolDepartmentNotFoundError(
+            department_slug=department_slug,
+        )
+
+    if department.status != "active":
+        raise ToolDepartmentInactiveError(
+            department_slug=department_slug,
+        )
+
+    event_service = EventService(session)
+
+    events = await event_service.list_upcoming_events(
+        organization_id=context.organization_id,
+        department_id=department.id,
+        limit=arguments.limit,
+    )
+
+    return GetUpcomingEventsResult(
+        organization_id=context.organization_id,
+        organization_slug=context.organization_slug,
+        department_id=department.id,
+        department_name=department.name,
+        department_slug=department.slug,
+        events=[
+            UpcomingEventItem(
+                id=event.id,
+                title=event.title,
+                description=event.description,
+                starts_at=event.starts_at,
+                ends_at=event.ends_at,
+                is_all_day=event.is_all_day,
+                timezone=event.timezone,
+                location=event.location,
+                event_url=event.event_url,
+            )
+            for event in events
+        ],
+    )
