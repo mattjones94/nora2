@@ -1,4 +1,43 @@
 from dataclasses import dataclass
+from typing import Any, Literal
+
+
+ToolExecutionAttemptPhase = Literal[
+    "action_selection",
+    "action_repair",
+]
+
+ToolExecutionStatus = Literal[
+    "succeeded",
+    "execution_failed",
+    "arguments_rejected",
+    "unknown_tool",
+]
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ConversationToolExecutionRecord:
+    """
+    One bounded audit record for a counted tool attempt.
+
+    Session, organization, and assistant-message identifiers are added
+    later by the persistence layer from trusted application context.
+    """
+
+    execution_order: int
+    attempt_phase: ToolExecutionAttemptPhase
+
+    tool_name: str
+
+    validated_arguments_json: dict[str, Any] | None
+
+    status: ToolExecutionStatus
+
+    failure_category: str | None = None
+    duration_ms: int | None = None
 
 
 @dataclass(
@@ -25,3 +64,34 @@ class ConversationTurnResult:
 
     tool_call_count: int = 0
     successful_tool_call_count: int = 0
+
+    tool_executions: tuple[
+        ConversationToolExecutionRecord,
+        ...
+    ] = ()
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ConversationStreamTextDelta:
+    """One ordered fragment of public assistant text."""
+
+    content: str
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ConversationStreamCompleted:
+    """The completed conversation result after streaming finishes."""
+
+    result: ConversationTurnResult
+
+
+ConversationStreamEvent = (
+    ConversationStreamTextDelta
+    | ConversationStreamCompleted
+)

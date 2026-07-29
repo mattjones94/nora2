@@ -1,10 +1,10 @@
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.department_details.repository import (
+from app.features.department_details.repository import (
     DepartmentDetailRepository,
 )
-from app.api.v1.admin.departments.repository import (
+from app.features.departments.repository import (
     DepartmentRepository,
 )
 from app.tools.context import ToolContext
@@ -14,12 +14,30 @@ from app.tools.errors import ToolExecutionError
 TOOL_NAME = "get_department_details"
 
 TOOL_DESCRIPTION = (
-    "Return information about one specific department within the "
-    "organization assigned to the current conversation. Use this when "
-    "the user asks what a department does or requests its contact name, "
-    "email, phone number, location, office hours, website, or other "
-    "department information."
+    "Return published information about one specific department within "
+    "the organization assigned to the current conversation. Use this "
+    "only when the user explicitly names a department or when a "
+    "specific department was clearly established by the chronological "
+    "conversation. Use it for that department's description, "
+    "responsibilities, contact name, email, phone number, location, "
+    "office hours, website, or other published details. Do not use this "
+    "tool to guess which department handles a service, problem, "
+    "activity, program, or area of work when no specific department "
+    "has been identified; use list_departments for that discovery "
+    "request. Generic words such as 'support', 'help-center', "
+    "'password', 'account', or 'services' are not department "
+    "identifiers. This tool does not list actual scheduled events."
 )
+
+TOOL_PRESENTATION_GUIDANCE = (
+    "Lead with the department's published name and description.",
+    "Include only contact, location, office-hours, website, and other "
+    "fields that contain published values.",
+    "When details_available is false, explain that no additional "
+    "published department details are currently available.",
+)
+
+TOOL_EMPTY_RESULT_GUIDANCE = None
 
 
 class GetDepartmentDetailsArguments(BaseModel):
@@ -43,10 +61,12 @@ class GetDepartmentDetailsArguments(BaseModel):
 class GetDepartmentDetailsResult(BaseModel):
     """Display-safe department information returned by the tool."""
 
-    organization_id: int
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
     organization_slug: str
 
-    department_id: int
     department_name: str
     department_slug: str
     description: str | None
@@ -67,8 +87,12 @@ class DepartmentDetailsToolError(ToolExecutionError):
     """Base error raised by the department-details tool."""
 
 
-class ToolDepartmentNotFoundError(DepartmentDetailsToolError):
+class ToolDepartmentNotFoundError(
+    DepartmentDetailsToolError
+):
     """Raised when the department cannot be resolved."""
+
+    failure_category = "department_not_found"
 
     def __init__(
         self,
@@ -80,8 +104,12 @@ class ToolDepartmentNotFoundError(DepartmentDetailsToolError):
         )
 
 
-class ToolDepartmentInactiveError(DepartmentDetailsToolError):
+class ToolDepartmentInactiveError(
+    DepartmentDetailsToolError
+):
     """Raised when the requested department is inactive."""
+
+    failure_category = "department_inactive"
 
     def __init__(
         self,
@@ -140,9 +168,7 @@ async def get_department_details(
         detail = None
 
     return GetDepartmentDetailsResult(
-        organization_id=context.organization_id,
         organization_slug=context.organization_slug,
-        department_id=department.id,
         department_name=department.name,
         department_slug=department.slug,
         description=department.description,

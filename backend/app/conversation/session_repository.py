@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +54,43 @@ class ConversationSessionRepository:
         )
 
         return result.one_or_none()
+
+    async def list_expired_active(
+        self,
+        *,
+        expired_at_or_before: datetime,
+        limit: int,
+    ) -> list[ConversationSession]:
+        """
+        Return and lock active sessions whose inactivity deadline passed.
+
+        Results are ordered by the oldest expiration deadline first.
+        """
+
+        statement = (
+            select(
+                ConversationSession
+            )
+            .where(
+                ConversationSession.status == "active",
+                ConversationSession.expires_at
+                <= expired_at_or_before,
+            )
+            .order_by(
+                ConversationSession.expires_at,
+                ConversationSession.id,
+            )
+            .limit(limit)
+            .with_for_update()
+        )
+
+        result = await self._session.scalars(
+            statement
+        )
+
+        return list(
+            result.all()
+        )
 
     async def update(
         self,

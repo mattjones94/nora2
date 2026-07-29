@@ -28,3 +28,13 @@ class ChatMessageResponse(BaseModel):
     organization_slug: str
     session_id: str
     assistant_message: str
+
+
+class ChatSessionCloseResponse(BaseModel):
+    """Confirmation that a public conversation was explicitly closed."""
+
+    organization_id: int
+    organization_slug: str
+    session_id: str
+    status: str
+    close_reason: str

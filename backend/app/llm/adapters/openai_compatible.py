@@ -1,12 +1,18 @@
+import json
 import os
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from app.llm.capabilities import ModelCapabilities
 from app.llm.contracts import (
+    ModelFinishReason,
     ModelRequest,
     ModelResponse,
+    ModelStreamCompleted,
+    ModelStreamEvent,
+    ModelStreamTextDelta,
     ModelUsage,
 )
 from app.llm.model_profiles import ModelProfile
@@ -81,7 +87,7 @@ class OpenAICompatibleModelClient:
 
         if request.stream:
             raise OpenAICompatibleConfigurationError(
-                "Streaming is not supported by this adapter yet."
+                "Streaming requests must use the stream method."
             )
 
         endpoint = f"{self._base_url}/chat/completions"
@@ -137,6 +143,193 @@ class OpenAICompatibleModelClient:
             response_data=response_data,
         )
 
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """
+        Stream provider output as normalized model events.
+
+        OpenAI-compatible SSE frames are consumed inside this adapter.
+        Provider-native frames are never exposed to the conversation or
+        API layers.
+        """
+
+        if not request.stream:
+            raise OpenAICompatibleConfigurationError(
+                "Streaming requests must set request.stream to True."
+            )
+
+        endpoint = f"{self._base_url}/chat/completions"
+
+        payload = self._build_payload(
+            request=request,
+        )
+
+        headers = self._build_headers()
+        headers["Accept"] = "text/event-stream"
+
+        text_fragments: list[str] = []
+
+        finish_reason: ModelFinishReason = "unknown"
+
+        usage: ModelUsage | None = None
+
+        returned_model_name = self._profile.model_name
+
+        last_response_data: dict[str, Any] | None = None
+
+        received_stream_data = False
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    self._profile.request_timeout_seconds
+                )
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+
+                        response_preview = response.text[:500]
+
+                        raise OpenAICompatibleResponseError(
+                            "The model server returned HTTP "
+                            f"{response.status_code}: "
+                            f"{response_preview}"
+                        )
+
+                    async for line in response.aiter_lines():
+                        stripped_line = line.strip()
+
+                        if not stripped_line:
+                            continue
+
+                        if stripped_line.startswith(":"):
+                            continue
+
+                        if stripped_line.startswith(
+                            (
+                                "event:",
+                                "id:",
+                                "retry:",
+                            )
+                        ):
+                            continue
+
+                        if not stripped_line.startswith("data:"):
+                            raise OpenAICompatibleResponseError(
+                                "The model stream contained an invalid "
+                                "SSE line."
+                            )
+
+                        raw_data = stripped_line[
+                            len("data:"):
+                        ].strip()
+
+                        if raw_data == "[DONE]":
+                            break
+
+                        if not raw_data:
+                            continue
+
+                        try:
+                            response_data = json.loads(
+                                raw_data
+                            )
+                        except json.JSONDecodeError as error:
+                            raise OpenAICompatibleResponseError(
+                                "The model stream contained invalid "
+                                "JSON."
+                            ) from error
+
+                        if not isinstance(response_data, dict):
+                            raise OpenAICompatibleResponseError(
+                                "Each model stream frame must contain "
+                                "a JSON object."
+                            )
+
+                        received_stream_data = True
+                        last_response_data = response_data
+
+                        raw_model_name = response_data.get(
+                            "model"
+                        )
+
+                        if isinstance(raw_model_name, str):
+                            returned_model_name = raw_model_name
+
+                        parsed_usage = self._parse_usage(
+                            raw_usage=response_data.get("usage"),
+                        )
+
+                        if parsed_usage is not None:
+                            usage = parsed_usage
+
+                        (
+                            content,
+                            chunk_finish_reason,
+                        ) = self._parse_stream_chunk(
+                            response_data=response_data,
+                        )
+
+                        if chunk_finish_reason is not None:
+                            finish_reason = chunk_finish_reason
+
+                        if content is None:
+                            continue
+
+                        text_fragments.append(
+                            content
+                        )
+
+                        yield ModelStreamTextDelta(
+                            content=content,
+                        )
+
+        except httpx.TimeoutException as error:
+            raise OpenAICompatibleConnectionError(
+                "The model streaming request timed out."
+            ) from error
+
+        except httpx.RequestError as error:
+            raise OpenAICompatibleConnectionError(
+                "NORA could not connect to the configured "
+                "model server."
+            ) from error
+
+        if not received_stream_data:
+            raise OpenAICompatibleResponseError(
+                "The model server did not return any stream data."
+            )
+
+        complete_text = "".join(
+            text_fragments
+        )
+
+        if not complete_text.strip():
+            raise OpenAICompatibleResponseError(
+                "The model stream did not contain usable text."
+            )
+
+        completed_response = ModelResponse(
+            text=complete_text,
+            finish_reason=finish_reason,
+            usage=usage,
+            provider_name=self._profile.provider_name,
+            model_name=returned_model_name,
+            raw_response=last_response_data,
+        )
+
+        yield ModelStreamCompleted(
+            response=completed_response,
+        )
+
     def _build_payload(
         self,
         *,
@@ -155,20 +348,37 @@ class OpenAICompatibleModelClient:
             self._profile.maximum_output_tokens,
         )
 
+        capabilities = self._profile.capabilities
+
         payload: dict[str, Any] = {
             "model": self._profile.model_name,
             "messages": messages,
             "temperature": request.temperature,
-            "max_tokens": maximum_output_tokens,
-            "stream": False,
+            "stream": request.stream,
         }
 
-        if self._profile.reasoning_effort is not None:
+        output_token_parameter = (
+            capabilities.output_token_parameter
+        )
+
+        if output_token_parameter != "none":
+            payload[
+                output_token_parameter
+            ] = maximum_output_tokens
+
+        if (
+            self._profile.reasoning_effort is not None
+            and capabilities.supports_reasoning_effort
+        ):
             payload["reasoning_effort"] = (
                 self._profile.reasoning_effort
             )
 
-        if request.response_format == "json_object":
+        if (
+            request.response_format == "json_object"
+            and capabilities
+            .accepts_response_format_json_object
+        ):
             payload["response_format"] = {
                 "type": "json_object",
             }
@@ -230,6 +440,10 @@ class OpenAICompatibleModelClient:
                 "The first model choice was invalid."
             )
 
+        finish_reason = self._normalize_finish_reason(
+            first_choice.get("finish_reason")
+        )
+
         message = first_choice.get("message")
 
         if not isinstance(message, dict):
@@ -259,11 +473,113 @@ class OpenAICompatibleModelClient:
 
         return ModelResponse(
             text=content,
+            finish_reason=finish_reason,
             usage=usage,
             provider_name=self._profile.provider_name,
             model_name=returned_model_name,
             raw_response=response_data,
         )
+
+    def _parse_stream_chunk(
+        self,
+        *,
+        response_data: dict[str, Any],
+    ) -> tuple[
+        str | None,
+        ModelFinishReason | None,
+    ]:
+        """Extract text and finish information from one stream chunk."""
+
+        choices = response_data.get("choices")
+
+        if not isinstance(choices, list):
+            raise OpenAICompatibleResponseError(
+                "The model stream frame did not contain a valid "
+                "choices list."
+            )
+
+        if not choices:
+            return (
+                None,
+                None,
+            )
+
+        first_choice = choices[0]
+
+        if not isinstance(first_choice, dict):
+            raise OpenAICompatibleResponseError(
+                "The first streamed model choice was invalid."
+            )
+
+        raw_finish_reason = first_choice.get(
+            "finish_reason"
+        )
+
+        finish_reason: ModelFinishReason | None = None
+
+        if raw_finish_reason is not None:
+            finish_reason = self._normalize_finish_reason(
+                raw_finish_reason
+            )
+
+        delta = first_choice.get("delta")
+
+        if delta is None:
+            return (
+                None,
+                finish_reason,
+            )
+
+        if not isinstance(delta, dict):
+            raise OpenAICompatibleResponseError(
+                "The streamed model choice contained an invalid "
+                "delta."
+            )
+
+        content = delta.get("content")
+
+        if content is None or content == "":
+            return (
+                None,
+                finish_reason,
+            )
+
+        if not isinstance(content, str):
+            raise OpenAICompatibleResponseError(
+                "The streamed model content delta must be text."
+            )
+
+        return (
+            content,
+            finish_reason,
+        )
+
+    def _normalize_finish_reason(
+        self,
+        value: Any,
+    ) -> ModelFinishReason:
+        """Normalize provider finish reasons into NORA's contract."""
+
+        if value == "stop":
+            return "stop"
+
+        if value == "length":
+            return "length"
+
+        if value == "content_filter":
+            return "content_filter"
+
+        if value == "error":
+            return "error"
+
+        if value in {
+            "tool_call",
+            "tool_calls",
+            "function_call",
+        }:
+            return "tool_call"
+
+        return "unknown"
 
     def _parse_usage(
         self,

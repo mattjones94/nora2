@@ -143,6 +143,20 @@ class ConversationMessage(Base):
         nullable=True,
     )
 
+    tool_call_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    successful_tool_call_count: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
     request_started_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,

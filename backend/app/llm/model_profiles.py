@@ -102,13 +102,16 @@ class ModelProfile(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def validate_adapter_configuration(self) -> "ModelProfile":
+    def validate_adapter_configuration(
+        self,
+    ) -> "ModelProfile":
         if (
             self.adapter_type == "openai_compatible"
             and not self.base_url
         ):
             raise ValueError(
-                "base_url is required for an openai_compatible profile"
+                "base_url is required for an "
+                "openai_compatible profile"
             )
 
         if (
@@ -118,6 +121,15 @@ class ModelProfile(BaseModel):
             raise ValueError(
                 "tool_mode cannot be native when native tools "
                 "are not supported"
+            )
+
+        if (
+            self.reasoning_effort is not None
+            and not self.capabilities.supports_reasoning_effort
+        ):
+            raise ValueError(
+                "reasoning_effort cannot be configured when "
+                "the profile does not support it"
             )
 
         return self
@@ -135,16 +147,20 @@ def create_development_model_profile() -> ModelProfile:
         base_url=None,
         credential_env_var=None,
         tool_mode="structured_json",
+        reasoning_effort=None,
         temperature=0.0,
         maximum_output_tokens=512,
         request_timeout_seconds=120.0,
         capabilities=ModelCapabilities(
             supports_native_tools=False,
             supports_structured_output=True,
+            accepts_response_format_json_object=False,
+            supports_reasoning_effort=False,
             supports_streaming=False,
             supports_system_messages=True,
             supports_multiple_tool_calls=False,
             supports_vision=False,
+            output_token_parameter="none",
             maximum_context_tokens=8192,
             maximum_output_tokens=512,
         ),
@@ -153,37 +169,7 @@ def create_development_model_profile() -> ModelProfile:
 
 
 def create_ollama_qwen3_1_7b_profile() -> ModelProfile:
-    """Return the first local Ollama demonstration profile."""
-
-    return ModelProfile(
-        profile_key="ollama-qwen3-1.7b",
-        display_name="Local Ollama Qwen3 1.7B",
-        adapter_type="openai_compatible",
-        provider_name="ollama",
-        model_name="qwen3:1.7b",
-        base_url=(
-            "http://host.docker.internal:11434/v1"
-        ),
-        credential_env_var=None,
-        tool_mode="structured_json",
-        temperature=0.0,
-        maximum_output_tokens=512,
-        request_timeout_seconds=180.0,
-        capabilities=ModelCapabilities(
-            supports_native_tools=False,
-            supports_structured_output=True,
-            supports_streaming=False,
-            supports_system_messages=True,
-            supports_multiple_tool_calls=False,
-            supports_vision=False,
-            maximum_context_tokens=None,
-            maximum_output_tokens=512,
-        ),
-        enabled=True,
-    )
-
-def create_ollama_qwen3_1_7b_profile() -> ModelProfile:
-    """Return the first local Ollama demonstration profile."""
+    """Return the local Ollama Qwen3 demonstration profile."""
 
     return ModelProfile(
         profile_key="ollama-qwen3-1.7b",
@@ -203,10 +189,13 @@ def create_ollama_qwen3_1_7b_profile() -> ModelProfile:
         capabilities=ModelCapabilities(
             supports_native_tools=False,
             supports_structured_output=True,
+            accepts_response_format_json_object=True,
+            supports_reasoning_effort=True,
             supports_streaming=False,
             supports_system_messages=True,
             supports_multiple_tool_calls=False,
             supports_vision=False,
+            output_token_parameter="max_tokens",
             maximum_context_tokens=None,
             maximum_output_tokens=512,
         ),

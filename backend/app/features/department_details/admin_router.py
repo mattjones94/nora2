@@ -8,24 +8,24 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.department_details.exceptions import (
+from app.database.models.department_detail import (
+    DepartmentDetail,
+)
+from app.database.session import get_database_session
+from app.features.department_details.exceptions import (
     DepartmentDetailConflictError,
     DepartmentDetailError,
     DepartmentDetailNotFoundError,
     DepartmentNotFoundError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.department_details.schemas import (
+from app.features.department_details.schemas import (
     DepartmentDetailResponse,
     DepartmentDetailUpsert,
 )
-from app.api.v1.admin.department_details.service import (
+from app.features.department_details.service import (
     DepartmentDetailService,
 )
-from app.database.models.department_detail import (
-    DepartmentDetail,
-)
-from app.database.session import get_database_session
 
 
 router = APIRouter(

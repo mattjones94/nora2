@@ -1,20 +1,26 @@
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Response, status
 
 from app.api.v1.router import router as api_v1_router
+from app.conversation.session_maintenance_worker import (
+    run_session_expiration_sweep_loop,
+)
+from app.core.config import get_settings
 from app.database.engine import check_database, engine
-from app.llm.runtime_provider import configure_model_client
 from app.llm.client_factory import build_model_client
 from app.llm.profile_registry import get_default_model_profile
+from app.llm.runtime_provider import configure_model_runtime
 from app.vector_store.qdrant import check_qdrant
-
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Manage resources owned by the API process."""
+
+    settings = get_settings()
 
     model_profile = get_default_model_profile()
 
@@ -22,13 +28,35 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         profile=model_profile
     )
 
-    configure_model_client(
-        model_client
+    configure_model_runtime(
+        client=model_client,
+        profile=model_profile,
+    )
+
+    expiration_sweep_task = asyncio.create_task(
+        run_session_expiration_sweep_loop(
+            interval_seconds=(
+                settings
+                .conversation_expiration_sweep_interval_seconds
+            ),
+            batch_size=(
+                settings
+                .conversation_expiration_sweep_batch_size
+            ),
+        ),
+        name="conversation-session-expiration-sweep",
     )
 
     try:
         yield
     finally:
+        expiration_sweep_task.cancel()
+
+        with suppress(
+            asyncio.CancelledError
+        ):
+            await expiration_sweep_task
+
         await engine.dispose()
 
 
@@ -53,7 +81,9 @@ async def health_live() -> dict[str, str]:
 
 
 @app.get("/api/v1/health/ready")
-async def health_ready(response: Response) -> dict[str, object]:
+async def health_ready(
+    response: Response,
+) -> dict[str, object]:
     """Confirm that the API can reach its required services."""
 
     services = {
@@ -79,9 +109,15 @@ async def health_ready(response: Response) -> dict[str, object]:
     )
 
     if not is_ready:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        response.status_code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+        )
 
     return {
-        "status": "ready" if is_ready else "not_ready",
+        "status": (
+            "ready"
+            if is_ready
+            else "not_ready"
+        ),
         "services": services,
     }

@@ -7,6 +7,9 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.conversation.metrics_repository import (
+    ConversationMetricsRepository,
+)
 from app.conversation.session_repository import (
     ConversationSessionRepository,
 )
@@ -88,9 +91,15 @@ class ConversationSessionService:
             )
 
         self._session = session
+
         self._sessions = ConversationSessionRepository(
             session
         )
+
+        self._metrics = ConversationMetricsRepository(
+            session
+        )
+
         self._timeout = timedelta(
             minutes=timeout_minutes
         )
@@ -221,12 +230,29 @@ class ConversationSessionService:
 
         if conversation_session.expires_at <= now:
             try:
+                metrics = await self._metrics.get_by_session_id(
+                    session_id=conversation_session.id,
+                )
+
+                if metrics is None:
+                    raise RuntimeError(
+                        "The conversation session metrics record "
+                        "could not be found."
+                    )
+
                 await self._sessions.update(
                     conversation_session=conversation_session,
                     changes={
                         "status": "expired",
                         "ended_at": now,
                         "close_reason": "inactivity_timeout",
+                    },
+                )
+
+                await self._metrics.update(
+                    metrics=metrics,
+                    changes={
+                        "completion_status": "expired",
                     },
                 )
 
@@ -254,6 +280,130 @@ class ConversationSessionService:
             raise
 
         return renewed_session
+
+    async def close(
+        self,
+        *,
+        organization_id: int,
+        public_id: str,
+        close_reason: str = "user_ended",
+    ) -> ConversationSession:
+        """
+        Explicitly close an active conversation and complete its metrics.
+
+        Expired, closed, abandoned, and error sessions cannot be closed
+        again through this operation.
+        """
+
+        normalized_public_id = self._normalize_public_id(
+            public_id
+        )
+
+        normalized_close_reason = (
+            close_reason
+            .strip()
+            .lower()
+        )
+
+        if not normalized_close_reason:
+            raise ValueError(
+                "close_reason cannot be empty"
+            )
+
+        if len(normalized_close_reason) > 100:
+            raise ValueError(
+                "close_reason cannot exceed 100 characters"
+            )
+
+        conversation_session = (
+            await self._sessions.get_by_public_id(
+                organization_id=organization_id,
+                public_id=normalized_public_id,
+            )
+        )
+
+        if conversation_session is None:
+            raise ConversationSessionNotFoundError()
+
+        if conversation_session.status != "active":
+            raise ConversationSessionUnavailableError(
+                status=conversation_session.status,
+            )
+
+        now = self._utc_now()
+
+        if conversation_session.expires_at <= now:
+            try:
+                metrics = await self._metrics.get_by_session_id(
+                    session_id=conversation_session.id,
+                )
+
+                if metrics is None:
+                    raise RuntimeError(
+                        "The conversation session metrics record "
+                        "could not be found."
+                    )
+
+                await self._sessions.update(
+                    conversation_session=conversation_session,
+                    changes={
+                        "status": "expired",
+                        "ended_at": now,
+                        "close_reason": "inactivity_timeout",
+                    },
+                )
+
+                await self._metrics.update(
+                    metrics=metrics,
+                    changes={
+                        "completion_status": "expired",
+                    },
+                )
+
+                await self._session.commit()
+
+            except Exception:
+                await self._session.rollback()
+                raise
+
+            raise ConversationSessionExpiredError()
+
+        try:
+            metrics = await self._metrics.get_by_session_id(
+                session_id=conversation_session.id,
+            )
+
+            if metrics is None:
+                raise RuntimeError(
+                    "The conversation session metrics record "
+                    "could not be found."
+                )
+
+            closed_session = await self._sessions.update(
+                conversation_session=conversation_session,
+                changes={
+                    "status": "closed",
+                    "ended_at": now,
+                    "close_reason": normalized_close_reason,
+                },
+            )
+
+            await self._metrics.update(
+                metrics=metrics,
+                changes={
+                    "completion_status": "completed",
+                },
+            )
+
+            await self._session.commit()
+
+        except Exception:
+            await self._session.rollback()
+            raise
+
+        return closed_session
+
+    
 
     def _normalize_public_id(
         self,

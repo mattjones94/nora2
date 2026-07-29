@@ -1,13 +1,18 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models.organization import Organization
 from app.database.session import get_database_session
-from app.api.v1.admin.organizations.schemas import (
+from app.features.organizations.schemas import (
     OrganizationCreate,
     OrganizationResponse,
 )
@@ -40,19 +45,25 @@ async def create_organization(
         slug=payload.slug,
     )
 
-    session.add(organization)
+    session.add(
+        organization
+    )
 
     try:
         await session.commit()
-    except IntegrityError as exc:
+    except IntegrityError as error:
         await session.rollback()
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="An organization with this slug already exists.",
-        ) from exc
+            detail=(
+                "An organization with this slug already exists."
+            ),
+        ) from error
 
-    await session.refresh(organization)
+    await session.refresh(
+        organization
+    )
 
     return organization
 
@@ -67,7 +78,13 @@ async def list_organizations(
     """Return all organizations stored in NORA."""
 
     result = await session.execute(
-        select(Organization).order_by(Organization.name),
+        select(
+            Organization
+        ).order_by(
+            Organization.name
+        ),
     )
 
-    return list(result.scalars().all())
+    return list(
+        result.scalars().all()
+    )

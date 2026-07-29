@@ -15,6 +15,12 @@ ModelRole = Literal[
     "tool",
 ]
 
+ModelRequestPurpose = Literal[
+    "action_selection",
+    "action_repair",
+    "tool_result_synthesis",
+]
+
 ModelResponseFormat = Literal[
     "text",
     "json_object",
@@ -103,6 +109,8 @@ class ModelRequest(BaseModel):
         extra="forbid",
     )
 
+    purpose: ModelRequestPurpose
+
     messages: list[ModelMessage] = Field(
         min_length=1,
     )
@@ -129,6 +137,40 @@ class ModelRequest(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
     )
+
+    @model_validator(mode="after")
+    def validate_request_phase(self) -> "ModelRequest":
+        if (
+            self.purpose
+            in {
+                "action_selection",
+                "action_repair",
+            }
+            and self.response_format != "json_object"
+        ):
+            raise ValueError(
+                "Action-selection and action-repair requests "
+                "must require json_object output."
+            )
+
+        if (
+            self.purpose == "tool_result_synthesis"
+            and self.response_format != "text"
+        ):
+            raise ValueError(
+                "Tool-result synthesis requests must require "
+                "text output."
+            )
+
+        if (
+            self.purpose == "tool_result_synthesis"
+            and self.tools
+        ):
+            raise ValueError(
+                "Tool-result synthesis requests must not expose tools."
+            )
+
+        return self
 
 
 class ModelUsage(BaseModel):
@@ -190,7 +232,40 @@ class ModelResponse(BaseModel):
 
         if not has_text and not self.tool_calls:
             raise ValueError(
-                "A model response must contain text or at least one tool call."
+                "A model response must contain text or at least "
+                "one tool call."
             )
 
         return self
+
+
+class ModelStreamTextDelta(BaseModel):
+    """One ordered text fragment produced by a model stream."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    event_type: Literal["text_delta"] = "text_delta"
+
+    content: str = Field(
+        min_length=1,
+    )
+
+
+class ModelStreamCompleted(BaseModel):
+    """The complete normalized response produced by a model stream."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    event_type: Literal["completed"] = "completed"
+
+    response: ModelResponse
+
+
+ModelStreamEvent = (
+    ModelStreamTextDelta
+    | ModelStreamCompleted
+)

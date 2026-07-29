@@ -1,9 +1,11 @@
+from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from app.llm.capabilities import ModelCapabilities
 from app.llm.contracts import (
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
 )
 
 
@@ -25,4 +27,9 @@ class ModelClient(Protocol):
         request: ModelRequest,
     ) -> ModelResponse:
         """Generate a normalized model response."""
-        ...
+
+    def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Generate provider-neutral streaming response events."""

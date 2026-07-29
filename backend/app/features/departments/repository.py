@@ -9,7 +9,10 @@ from app.database.models.department import Department
 class DepartmentRepository:
     """Handle persistence operations for departments."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+    ) -> None:
         self._session = session
 
     async def create(
@@ -18,10 +21,14 @@ class DepartmentRepository:
     ) -> Department:
         """Add a department to the current database transaction."""
 
-        self._session.add(department)
+        self._session.add(
+            department
+        )
 
         await self._session.flush()
-        await self._session.refresh(department)
+        await self._session.refresh(
+            department
+        )
 
         return department
 
@@ -32,12 +39,16 @@ class DepartmentRepository:
     ) -> Department | None:
         """Find a department within a specific organization."""
 
-        statement = select(Department).where(
+        statement = select(
+            Department
+        ).where(
             Department.id == department_id,
             Department.organization_id == organization_id,
         )
 
-        result = await self._session.scalars(statement)
+        result = await self._session.scalars(
+            statement
+        )
 
         return result.one_or_none()
 
@@ -48,12 +59,16 @@ class DepartmentRepository:
     ) -> Department | None:
         """Find a department by its organization-scoped slug."""
 
-        statement = select(Department).where(
+        statement = select(
+            Department
+        ).where(
             Department.organization_id == organization_id,
             Department.slug == slug,
         )
 
-        result = await self._session.scalars(statement)
+        result = await self._session.scalars(
+            statement
+        )
 
         return result.one_or_none()
 
@@ -66,7 +81,9 @@ class DepartmentRepository:
         """Return departments belonging to an organization."""
 
         statement = (
-            select(Department)
+            select(
+                Department
+            )
             .where(
                 Department.organization_id == organization_id,
             )
@@ -81,9 +98,13 @@ class DepartmentRepository:
                 Department.status == "active",
             )
 
-        result = await self._session.scalars(statement)
+        result = await self._session.scalars(
+            statement
+        )
 
-        return list(result.all())
+        return list(
+            result.all()
+        )
 
     async def update(
         self,
@@ -100,7 +121,9 @@ class DepartmentRepository:
             )
 
         await self._session.flush()
-        await self._session.refresh(department)
+        await self._session.refresh(
+            department
+        )
 
         return department
 
@@ -113,6 +136,8 @@ class DepartmentRepository:
         department.status = "inactive"
 
         await self._session.flush()
-        await self._session.refresh(department)
+        await self._session.refresh(
+            department
+        )
 
         return department

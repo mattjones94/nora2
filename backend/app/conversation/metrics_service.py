@@ -134,6 +134,48 @@ class ConversationMetricsService:
             )
         ).one()
 
+        tool_statement = select(
+            func.coalesce(
+                func.sum(
+                    ConversationMessage.tool_call_count
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    ConversationMessage.successful_tool_call_count
+                ),
+                0,
+            ),
+        ).where(
+            ConversationMessage.session_id == session_id,
+            ConversationMessage.message_type
+            == "assistant_message",
+            ConversationMessage.status == "completed",
+        )
+
+        tool_result = (
+            await self._session.execute(
+                tool_statement
+            )
+        ).one()
+
+        tool_call_count = int(
+            tool_result[0]
+        )
+
+        successful_tool_call_count = int(
+            tool_result[1]
+        )
+
+        failed_tool_call_count = max(
+            0,
+            (
+                tool_call_count
+                - successful_tool_call_count
+            ),
+        )
+
         duration_seconds = max(
             0,
             round(
@@ -151,6 +193,13 @@ class ConversationMetricsService:
                     "user_message_count": user_message_count,
                     "assistant_message_count": (
                         assistant_message_count
+                    ),
+                    "tool_call_count": tool_call_count,
+                    "successful_tool_call_count": (
+                        successful_tool_call_count
+                    ),
+                    "failed_tool_call_count": (
+                        failed_tool_call_count
                     ),
                     "duration_seconds": duration_seconds,
                     "average_total_response_time_ms": (

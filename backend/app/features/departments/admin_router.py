@@ -10,21 +10,23 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.departments.exceptions import (
+from app.database.models.department import Department
+from app.database.session import get_database_session
+from app.features.departments.exceptions import (
     DepartmentError,
     DepartmentNotFoundError,
     DepartmentSlugConflictError,
     OrganizationInactiveError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.departments.schemas import (
+from app.features.departments.schemas import (
     DepartmentCreate,
     DepartmentResponse,
     DepartmentUpdate,
 )
-from app.api.v1.admin.departments.service import DepartmentService
-from app.database.models.department import Department
-from app.database.session import get_database_session
+from app.features.departments.service import (
+    DepartmentService,
+)
 
 
 router = APIRouter(
@@ -85,7 +87,9 @@ async def create_department(
 ) -> Department:
     """Create a department within an organization."""
 
-    service = DepartmentService(session)
+    service = DepartmentService(
+        session
+    )
 
     try:
         return await service.create(
@@ -93,7 +97,9 @@ async def create_department(
             payload=payload,
         )
     except DepartmentError as error:
-        raise translate_department_error(error) from error
+        raise translate_department_error(
+            error
+        ) from error
 
 
 @router.get(
@@ -110,7 +116,9 @@ async def list_departments(
 ) -> list[Department]:
     """List departments within an organization."""
 
-    service = DepartmentService(session)
+    service = DepartmentService(
+        session
+    )
 
     try:
         return await service.list_by_organization(
@@ -118,7 +126,9 @@ async def list_departments(
             include_inactive=include_inactive,
         )
     except DepartmentError as error:
-        raise translate_department_error(error) from error
+        raise translate_department_error(
+            error
+        ) from error
 
 
 @router.get(
@@ -132,7 +142,9 @@ async def get_department(
 ) -> Department:
     """Return one department within an organization."""
 
-    service = DepartmentService(session)
+    service = DepartmentService(
+        session
+    )
 
     try:
         return await service.get_by_id(
@@ -140,7 +152,9 @@ async def get_department(
             department_id=department_id,
         )
     except DepartmentError as error:
-        raise translate_department_error(error) from error
+        raise translate_department_error(
+            error
+        ) from error
 
 
 @router.patch(
@@ -155,7 +169,9 @@ async def update_department(
 ) -> Department:
     """Update selected department fields."""
 
-    service = DepartmentService(session)
+    service = DepartmentService(
+        session
+    )
 
     try:
         return await service.update(
@@ -164,7 +180,9 @@ async def update_department(
             payload=payload,
         )
     except DepartmentError as error:
-        raise translate_department_error(error) from error
+        raise translate_department_error(
+            error
+        ) from error
 
 
 @router.delete(
@@ -178,7 +196,9 @@ async def deactivate_department(
 ) -> Response:
     """Deactivate a department without deleting its records."""
 
-    service = DepartmentService(session)
+    service = DepartmentService(
+        session
+    )
 
     try:
         await service.deactivate(
@@ -186,7 +206,9 @@ async def deactivate_department(
             department_id=department_id,
         )
     except DepartmentError as error:
-        raise translate_department_error(error) from error
+        raise translate_department_error(
+            error
+        ) from error
 
     return Response(
         status_code=status.HTTP_204_NO_CONTENT,

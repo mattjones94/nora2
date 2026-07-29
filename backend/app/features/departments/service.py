@@ -1,32 +1,41 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.departments.exceptions import (
+from app.database.models.department import Department
+from app.features.departments.exceptions import (
     DepartmentNotFoundError,
     DepartmentSlugConflictError,
     OrganizationInactiveError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.departments.repository import (
+from app.features.departments.repository import (
     DepartmentRepository,
 )
-from app.api.v1.admin.departments.schemas import (
+from app.features.departments.schemas import (
     DepartmentCreate,
     DepartmentUpdate,
 )
-from app.api.v1.admin.organizations.repository import (
+from app.features.organizations.repository import (
     OrganizationRepository,
 )
-from app.database.models.department import Department
 
 
 class DepartmentService:
     """Coordinate department business rules and transactions."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+    ) -> None:
         self._session = session
-        self._departments = DepartmentRepository(session)
-        self._organizations = OrganizationRepository(session)
+
+        self._departments = DepartmentRepository(
+            session
+        )
+
+        self._organizations = OrganizationRepository(
+            session
+        )
 
     async def create(
         self,
@@ -36,7 +45,7 @@ class DepartmentService:
         """Create a department under an active organization."""
 
         organization = await self._organizations.get_by_id(
-            organization_id,
+            organization_id
         )
 
         if organization is None:
@@ -46,7 +55,8 @@ class DepartmentService:
 
         if organization.status != "active":
             raise OrganizationInactiveError(
-                "Departments cannot be added to an inactive organization.",
+                "Departments cannot be added to an inactive "
+                "organization.",
             )
 
         existing_department = await self._departments.get_by_slug(
@@ -68,15 +78,20 @@ class DepartmentService:
         )
 
         try:
-            await self._departments.create(department)
+            await self._departments.create(
+                department
+            )
+
             await self._session.commit()
-        except IntegrityError as exc:
+
+        except IntegrityError as error:
             await self._session.rollback()
 
             raise DepartmentSlugConflictError(
                 "This organization already has a department "
                 "with that slug.",
-            ) from exc
+            ) from error
+
         except Exception:
             await self._session.rollback()
             raise
@@ -91,7 +106,9 @@ class DepartmentService:
     ) -> list[Department]:
         """List departments belonging to an organization."""
 
-        await self._require_organization(organization_id)
+        await self._require_organization(
+            organization_id
+        )
 
         return await self._departments.list_by_organization(
             organization_id=organization_id,
@@ -134,15 +151,22 @@ class DepartmentService:
             exclude_unset=True,
         )
 
-        requested_slug = changes.get("slug")
+        requested_slug = changes.get(
+            "slug"
+        )
 
         if (
-            isinstance(requested_slug, str)
+            isinstance(
+                requested_slug,
+                str,
+            )
             and requested_slug != department.slug
         ):
-            existing_department = await self._departments.get_by_slug(
-                organization_id=organization_id,
-                slug=requested_slug,
+            existing_department = (
+                await self._departments.get_by_slug(
+                    organization_id=organization_id,
+                    slug=requested_slug,
+                )
             )
 
             if existing_department is not None:
@@ -155,19 +179,23 @@ class DepartmentService:
             return department
 
         try:
-            updated_department = await self._departments.update(
-                department=department,
-                changes=changes,
+            updated_department = (
+                await self._departments.update(
+                    department=department,
+                    changes=changes,
+                )
             )
 
             await self._session.commit()
-        except IntegrityError as exc:
+
+        except IntegrityError as error:
             await self._session.rollback()
 
             raise DepartmentSlugConflictError(
                 "This organization already has a department "
                 "with that slug.",
-            ) from exc
+            ) from error
+
         except Exception:
             await self._session.rollback()
             raise
@@ -190,11 +218,14 @@ class DepartmentService:
             return department
 
         try:
-            deactivated_department = await self._departments.deactivate(
-                department,
+            deactivated_department = (
+                await self._departments.deactivate(
+                    department
+                )
             )
 
             await self._session.commit()
+
         except Exception:
             await self._session.rollback()
             raise
@@ -208,7 +239,7 @@ class DepartmentService:
         """Ensure that an organization exists."""
 
         organization = await self._organizations.get_by_id(
-            organization_id,
+            organization_id
         )
 
         if organization is None:

@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-from app.api.v1.admin.organizations.repository import (
+from app.features.organizations.repository import (
     OrganizationRepository,
 )
 from app.tools.context import ToolContext

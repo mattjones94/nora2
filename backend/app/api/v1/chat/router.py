@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.chat.schemas import (
     ChatMessageRequest,
     ChatMessageResponse,
+    ChatSessionCloseResponse,
 )
 from app.conversation.message_service import (
     ConversationMessageService,
@@ -38,12 +39,10 @@ from app.conversation.session_service import (
     InvalidConversationSessionIdError,
 )
 from app.database.session import get_database_session
-from app.llm.profile_registry import (
-    get_default_model_profile,
-)
+
 from app.llm.runtime_provider import (
     ModelClientNotConfiguredError,
-    get_model_client,
+    get_model_runtime,
 )
 
 
@@ -161,14 +160,15 @@ async def submit_chat_message(
         ) from error
 
     try:
-        model_client = get_model_client()
+        model_runtime = get_model_runtime()
     except ModelClientNotConfiguredError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The chat service is not currently available.",
         ) from error
 
-    model_profile = get_default_model_profile()
+    model_client = model_runtime.client
+    model_profile = model_runtime.profile
 
     conversation_session_service = ConversationSessionService(
         session
@@ -255,6 +255,11 @@ async def submit_chat_message(
         total_response_time_ms=total_response_time_ms,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        tool_call_count=result.tool_call_count,
+        successful_tool_call_count=(
+            result.successful_tool_call_count
+        ),
+        tool_executions=result.tool_executions,
     )
 
     metrics_service = ConversationMetricsService(
@@ -270,4 +275,55 @@ async def submit_chat_message(
         organization_slug=tool_context.organization_slug,
         session_id=conversation_session.public_id,
         assistant_message=result.message,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/close",
+    response_model=ChatSessionCloseResponse,
+)
+async def close_chat_session(
+    organization_slug: str,
+    session_id: str,
+    session: DatabaseSession,
+) -> ChatSessionCloseResponse:
+    """Explicitly close one active public conversation session."""
+
+    resolver = OrganizationContextResolver(
+        session
+    )
+
+    try:
+        organization_context = await resolver.resolve(
+            organization_slug=organization_slug,
+        )
+    except OrganizationContextError as error:
+        raise translate_organization_context_error(
+            error
+        ) from error
+
+    session_service = ConversationSessionService(
+        session
+    )
+
+    try:
+        closed_session = await session_service.close(
+            organization_id=organization_context.organization_id,
+            public_id=session_id,
+            close_reason="user_ended",
+        )
+    except ConversationSessionError as error:
+        raise translate_conversation_session_error(
+            error
+        ) from error
+
+    return ChatSessionCloseResponse(
+        organization_id=organization_context.organization_id,
+        organization_slug=organization_context.organization_slug,
+        session_id=closed_session.public_id,
+        status=closed_session.status,
+        close_reason=(
+            closed_session.close_reason
+            or "user_ended"
+        ),
     )

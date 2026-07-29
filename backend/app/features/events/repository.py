@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
-from app.api.v1.admin.events.schemas import EventCreate
+from app.features.events.schemas import EventCreate
 from app.database.models.event import Event
 
 

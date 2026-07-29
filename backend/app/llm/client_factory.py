@@ -1,12 +1,13 @@
 from collections.abc import Callable
 
-from app.llm.adapters.development import DevelopmentModelClient
-from app.llm.model_profiles import ModelProfile
-from app.llm.runtime import ModelClient
-
+from app.llm.adapters.development import (
+    DevelopmentModelClient,
+)
 from app.llm.adapters.openai_compatible import (
     OpenAICompatibleModelClient,
 )
+from app.llm.model_profiles import ModelProfile
+from app.llm.runtime import ModelClient
 
 
 class ModelClientFactoryError(Exception):
@@ -16,16 +17,24 @@ class ModelClientFactoryError(Exception):
 class DisabledModelProfileError(ModelClientFactoryError):
     """Raised when a disabled profile is selected."""
 
-    def __init__(self, profile_key: str) -> None:
+    def __init__(
+        self,
+        profile_key: str,
+    ) -> None:
         super().__init__(
             f"Model profile '{profile_key}' is disabled."
         )
 
 
-class UnsupportedModelAdapterError(ModelClientFactoryError):
+class UnsupportedModelAdapterError(
+    ModelClientFactoryError
+):
     """Raised when no client builder exists for an adapter."""
 
-    def __init__(self, adapter_type: str) -> None:
+    def __init__(
+        self,
+        adapter_type: str,
+    ) -> None:
         super().__init__(
             f"Model adapter '{adapter_type}' is not supported."
         )
@@ -43,8 +52,9 @@ def _build_development_client(
     """Build the deterministic development client."""
 
     return DevelopmentModelClient(
-        model_name=profile.model_name,
+        profile=profile,
     )
+
 
 def _build_openai_compatible_client(
     profile: ModelProfile,
@@ -63,7 +73,7 @@ _CLIENT_BUILDERS: dict[
     "development": _build_development_client,
     "openai_compatible": (
         _build_openai_compatible_client
-    )
+    ),
 }
 
 
@@ -86,4 +96,6 @@ def build_model_client(
             adapter_type=profile.adapter_type,
         )
 
-    return builder(profile)
+    return builder(
+        profile
+    )

@@ -1,8 +1,17 @@
+from typing import Literal
+
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
 )
+
+
+ModelOutputTokenParameter = Literal[
+    "max_tokens",
+    "max_completion_tokens",
+    "none",
+]
 
 
 class ModelCapabilities(BaseModel):
@@ -16,6 +25,10 @@ class ModelCapabilities(BaseModel):
 
     supports_structured_output: bool = False
 
+    accepts_response_format_json_object: bool = False
+
+    supports_reasoning_effort: bool = False
+
     supports_streaming: bool = False
 
     supports_system_messages: bool = True
@@ -23,6 +36,10 @@ class ModelCapabilities(BaseModel):
     supports_multiple_tool_calls: bool = False
 
     supports_vision: bool = False
+
+    output_token_parameter: ModelOutputTokenParameter = (
+        "max_tokens"
+    )
 
     maximum_context_tokens: int | None = Field(
         default=None,

@@ -23,10 +23,14 @@ class DepartmentDetailRepository:
     ) -> DepartmentDetail:
         """Add a department-details record to the transaction."""
 
-        self._session.add(detail)
+        self._session.add(
+            detail
+        )
 
         await self._session.flush()
-        await self._session.refresh(detail)
+        await self._session.refresh(
+            detail
+        )
 
         return detail
 
@@ -40,8 +44,10 @@ class DepartmentDetailRepository:
         statement = select(
             DepartmentDetail
         ).where(
-            DepartmentDetail.organization_id == organization_id,
-            DepartmentDetail.department_id == department_id,
+            DepartmentDetail.organization_id
+            == organization_id,
+            DepartmentDetail.department_id
+            == department_id,
         )
 
         result = await self._session.scalars(
@@ -65,6 +71,8 @@ class DepartmentDetailRepository:
             )
 
         await self._session.flush()
-        await self._session.refresh(detail)
+        await self._session.refresh(
+            detail
+        )
 
         return detail

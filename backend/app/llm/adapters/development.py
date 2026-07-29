@@ -1,251 +1,245 @@
 import json
-from datetime import datetime
-from typing import Any
+from collections import deque
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 
 from app.llm.capabilities import ModelCapabilities
 from app.llm.contracts import (
     ModelRequest,
+    ModelRequestPurpose,
     ModelResponse,
+    ModelStreamCompleted,
+    ModelStreamEvent,
+    ModelStreamTextDelta,
 )
+from app.llm.model_profiles import ModelProfile
 from app.llm.runtime import ModelClientError
+
+_DEVELOPMENT_STREAM_CHUNK_SIZE = 24
+
+
+class DevelopmentModelClientError(ModelClientError):
+    """Base error raised by the deterministic development adapter."""
+
+
+class DevelopmentModelConfigurationError(
+    DevelopmentModelClientError
+):
+    """Raised when the selected profile cannot use this adapter."""
+
+
+class DevelopmentScriptPurposeMismatchError(
+    DevelopmentModelClientError
+):
+    """Raised when a scripted step does not match the request purpose."""
+
+    def __init__(
+        self,
+        *,
+        expected_purpose: ModelRequestPurpose,
+        actual_purpose: ModelRequestPurpose,
+    ) -> None:
+        self.expected_purpose = expected_purpose
+        self.actual_purpose = actual_purpose
+
+        super().__init__(
+            "The next scripted development response expected request "
+            f"purpose '{expected_purpose}', but received "
+            f"'{actual_purpose}'."
+        )
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DevelopmentScriptStep:
+    """One expected request and deterministic model response."""
+
+    purpose: ModelRequestPurpose
+    response: ModelResponse
 
 
 class DevelopmentModelClient:
     """
-    Deterministic model client used to test NORA without a real LLM.
+    Generic deterministic client for testing NORA without a real model.
 
-    It implements the same provider-neutral interface that future
-    OpenAI-compatible, Anthropic, Ollama, and LiteRT-LM adapters will use.
+    Tests may supply ordered script steps. When no script is supplied,
+    the client returns a safe generic response rather than containing
+    feature-specific or organization-specific behavior.
     """
 
     def __init__(
         self,
-        model_name: str = "deterministic-test-client",
+        *,
+        profile: ModelProfile,
+        script: Sequence[DevelopmentScriptStep] = (),
     ) -> None:
-        self._model_name = model_name
+        if profile.adapter_type != "development":
+            raise DevelopmentModelConfigurationError(
+                "The profile must use the development adapter."
+            )
+
+        self._profile = profile
+
+        self._script = deque(
+            script
+        )
+
+        self._requests: list[ModelRequest] = []
 
     @property
     def capabilities(self) -> ModelCapabilities:
-        return ModelCapabilities(
-            supports_native_tools=False,
-            supports_structured_output=True,
-            supports_streaming=False,
-            supports_system_messages=True,
-            supports_multiple_tool_calls=False,
-            supports_vision=False,
-            maximum_context_tokens=8192,
-            maximum_output_tokens=512,
+        """Return capabilities declared by the selected profile."""
+
+        return self._profile.capabilities
+
+    @property
+    def requests(self) -> tuple[ModelRequest, ...]:
+        """Return requests received by this client in call order."""
+
+        return tuple(
+            self._requests
+        )
+
+    @property
+    def remaining_script_steps(self) -> int:
+        """Return the number of scripted responses not yet consumed."""
+
+        return len(
+            self._script
         )
 
     async def generate(
         self,
         request: ModelRequest,
     ) -> ModelResponse:
-        prompt = self._extract_prompt(
+        """Return the next scripted or safe default response."""
+
+        self._requests.append(
+            request
+        )
+
+        if self._script:
+            script_step = self._script.popleft()
+
+            if script_step.purpose != request.purpose:
+                raise DevelopmentScriptPurposeMismatchError(
+                    expected_purpose=script_step.purpose,
+                    actual_purpose=request.purpose,
+                )
+
+            return self._normalize_response(
+                response=script_step.response,
+            )
+
+        return self._build_default_response(
             request=request,
         )
+    
 
-        if "Verified tool result:" in prompt:
-            tool_result = self._extract_json_after_marker(
-                prompt=prompt,
-                marker="Verified tool result:",
-            )
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """
+        Yield deterministic text fragments and one completed response.
 
-            if not isinstance(tool_result, dict):
-                raise ModelClientError(
-                    "The development client received an invalid tool result."
-                )
+        The development adapter reuses generate() so scripted response
+        selection, request recording, purpose validation, default
+        behavior, and profile normalization remain identical between
+        delivery modes.
+        """
 
-            return ModelResponse(
-                text=json.dumps(
-                    {
-                        "action": "respond",
-                        "message": self._build_event_response(
-                            tool_result=tool_result,
-                        ),
-                    }
-                ),
-                finish_reason="stop",
-                provider_name="development",
-                model_name=self._model_name,
-            )
-
-        if "User message:" in prompt:
-            user_message = self._extract_json_after_marker(
-                prompt=prompt,
-                marker="User message:",
-            )
-
-            if not isinstance(user_message, str):
-                raise ModelClientError(
-                    "The development client received an invalid user message."
-                )
-
-            normalized_message = user_message.lower()
-
-            if (
-                "student life" in normalized_message
-                and "event" in normalized_message
-            ):
-                return ModelResponse(
-                    text=json.dumps(
-                        {
-                            "action": "tool_call",
-                            "tool_name": "get_upcoming_events",
-                            "arguments": {
-                                "department_slug": "student-life",
-                                "limit": 10,
-                            },
-                        }
-                    ),
-                    finish_reason="stop",
-                    provider_name="development",
-                    model_name=self._model_name,
-                )
-
-            return ModelResponse(
-                text=json.dumps(
-                    {
-                        "action": "respond",
-                        "message": (
-                            "I can currently help test questions about "
-                            "upcoming Student Life events."
-                        ),
-                    }
-                ),
-                finish_reason="stop",
-                provider_name="development",
-                model_name=self._model_name,
-            )
-
-        raise ModelClientError(
-            "The development client did not recognize the request."
+        response = await self.generate(
+            request
         )
 
-    def _extract_prompt(
+        if (
+            response.text is None
+            or not response.text.strip()
+        ):
+            raise DevelopmentModelClientError(
+                "The deterministic development stream requires a "
+                "response containing public text."
+            )
+
+        for start_index in range(
+            0,
+            len(response.text),
+            _DEVELOPMENT_STREAM_CHUNK_SIZE,
+        ):
+            yield ModelStreamTextDelta(
+                content=response.text[
+                    start_index:
+                    start_index
+                    + _DEVELOPMENT_STREAM_CHUNK_SIZE
+                ],
+            )
+
+        yield ModelStreamCompleted(
+            response=response,
+        )
+
+    def _build_default_response(
         self,
         *,
         request: ModelRequest,
-    ) -> str:
-        for message in reversed(request.messages):
-            if message.content and message.content.strip():
-                return message.content
+    ) -> ModelResponse:
+        """Return a safe response when no test script was configured."""
 
-        raise ModelClientError(
-            "The model request did not contain a usable message."
+        message = (
+            "The deterministic development model is active, but no "
+            "scripted response was configured for this request."
         )
 
-    def _extract_json_after_marker(
+        if request.purpose in {
+            "action_selection",
+            "action_repair",
+        }:
+            response_text = json.dumps(
+                {
+                    "action": "respond",
+                    "message": message,
+                }
+            )
+        elif request.purpose == "tool_result_synthesis":
+            response_text = message
+        else:
+            raise DevelopmentModelClientError(
+                "The development client does not support request "
+                f"purpose '{request.purpose}'."
+            )
+
+        return ModelResponse(
+            text=response_text,
+            finish_reason="stop",
+            provider_name=self._profile.provider_name,
+            model_name=self._profile.model_name,
+        )
+
+    def _normalize_response(
         self,
         *,
-        prompt: str,
-        marker: str,
-    ) -> Any:
-        marker_position = prompt.find(marker)
+        response: ModelResponse,
+    ) -> ModelResponse:
+        """Apply profile identity when a script omits provider metadata."""
 
-        if marker_position == -1:
-            raise ModelClientError(
-                f'The prompt did not contain the marker "{marker}".'
+        updates: dict[str, str] = {}
+
+        if response.provider_name is None:
+            updates["provider_name"] = (
+                self._profile.provider_name
             )
 
-        json_text = prompt[
-            marker_position + len(marker):
-        ].lstrip()
-
-        try:
-            value, _ = json.JSONDecoder().raw_decode(
-                json_text
+        if response.model_name is None:
+            updates["model_name"] = (
+                self._profile.model_name
             )
-        except json.JSONDecodeError as error:
-            raise ModelClientError(
-                f"Unable to parse prompt data: {error.msg}"
-            ) from error
 
-        return value
+        if not updates:
+            return response
 
-    def _build_event_response(
-        self,
-        *,
-        tool_result: dict[str, Any],
-    ) -> str:
-        department_name = str(
-            tool_result.get(
-                "department_name",
-                "The department",
-            )
+        return response.model_copy(
+            update=updates,
         )
-
-        events = tool_result.get(
-            "events",
-            [],
-        )
-
-        if not isinstance(events, list) or not events:
-            return (
-                f"{department_name} does not currently have any "
-                "active upcoming events listed."
-            )
-
-        event_descriptions: list[str] = []
-
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-
-            title = str(
-                event.get(
-                    "title",
-                    "Unnamed event",
-                )
-            )
-
-            description = title
-            starts_at = event.get("starts_at")
-
-            if isinstance(starts_at, str):
-                description += (
-                    f" on {self._format_datetime(starts_at)}"
-                )
-
-            location = event.get("location")
-
-            if isinstance(location, str) and location:
-                description += f" at {location}"
-
-            event_descriptions.append(
-                description
-            )
-
-        if not event_descriptions:
-            return (
-                f"{department_name} does not currently have any "
-                "active upcoming events listed."
-            )
-
-        return (
-            f"{department_name} has {len(event_descriptions)} "
-            f"upcoming events: {'; '.join(event_descriptions)}."
-        )
-
-    def _format_datetime(
-        self,
-        value: str,
-    ) -> str:
-        try:
-            parsed_value = datetime.fromisoformat(
-                value
-            )
-        except ValueError:
-            return value
-
-        date_text = (
-            f"{parsed_value.strftime('%B')} "
-            f"{parsed_value.day}, "
-            f"{parsed_value.year}"
-        )
-
-        time_text = parsed_value.strftime(
-            "%I:%M %p"
-        ).lstrip("0")
-
-        return f"{date_text} at {time_text}"

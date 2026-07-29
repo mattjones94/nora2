@@ -9,7 +9,7 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.events.exceptions import (
+from app.features.events.exceptions import (
     DepartmentInactiveError,
     DepartmentNotFoundError,
     EventNotFoundError,
@@ -17,11 +17,11 @@ from app.api.v1.admin.events.exceptions import (
     OrganizationInactiveError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.events.schemas import (
+from app.features.events.schemas import (
     EventCreate,
     EventResponse,
 )
-from app.api.v1.admin.events.service import EventService
+from app.features.events.service import EventService
 from app.database.models.event import Event
 from app.database.session import get_database_session
 

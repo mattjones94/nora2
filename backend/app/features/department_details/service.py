@@ -1,26 +1,26 @@
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.admin.department_details.exceptions import (
+from app.database.models.department_detail import (
+    DepartmentDetail,
+)
+from app.features.department_details.exceptions import (
     DepartmentDetailConflictError,
     DepartmentDetailNotFoundError,
     DepartmentNotFoundError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.department_details.repository import (
+from app.features.department_details.repository import (
     DepartmentDetailRepository,
 )
-from app.api.v1.admin.department_details.schemas import (
+from app.features.department_details.schemas import (
     DepartmentDetailUpsert,
 )
-from app.api.v1.admin.departments.repository import (
+from app.features.departments.repository import (
     DepartmentRepository,
 )
-from app.api.v1.admin.organizations.repository import (
+from app.features.organizations.repository import (
     OrganizationRepository,
-)
-from app.database.models.department_detail import (
-    DepartmentDetail,
 )
 
 

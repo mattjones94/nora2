@@ -2,17 +2,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.api.v1.admin.departments.repository import DepartmentRepository
-from app.api.v1.admin.events.exceptions import (
+from app.features.departments.repository import (
+    DepartmentRepository,
+)
+from app.features.events.exceptions import (
     DepartmentInactiveError,
     DepartmentNotFoundError,
     EventNotFoundError,
     OrganizationInactiveError,
     OrganizationNotFoundError,
 )
-from app.api.v1.admin.events.repository import EventRepository
-from app.api.v1.admin.events.schemas import EventCreate
-from app.api.v1.admin.organizations.repository import OrganizationRepository
+from app.features.events.repository import EventRepository
+from app.features.events.schemas import EventCreate
+from app.features.organizations.repository import (
+    OrganizationRepository,
+)
 from app.database.models.event import Event
 
 
