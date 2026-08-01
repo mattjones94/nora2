@@ -14,6 +14,7 @@ from app.llm.client_factory import build_model_client
 from app.llm.profile_registry import get_default_model_profile
 from app.llm.runtime_provider import configure_model_runtime
 from app.vector_store.qdrant import check_qdrant
+from fastapi.middleware.cors import CORSMiddleware
 
 
 @asynccontextmanager
@@ -64,6 +65,24 @@ app = FastAPI(
     title="NORA Server API",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=[
+        "GET",
+        "POST",
+        "OPTIONS",
+    ],
+    allow_headers=[
+        "Content-Type",
+        "Accept",
+    ],
 )
 
 app.include_router(api_v1_router)

@@ -30,6 +30,9 @@ from app.conversation.organization_context import (
 from app.conversation.orchestrator import (
     ConversationOrchestrator,
 )
+from app.conversation.response_contracts import (
+    ConversationToolContextRecord,
+)
 from app.conversation.session_service import (
     ConversationSessionError,
     ConversationSessionExpiredError,
@@ -206,6 +209,46 @@ async def submit_chat_message(
         if message.content is not None
     ]
 
+
+    stored_tool_context = (
+        await message_service.list_recent_tool_context(
+            session_id=conversation_session.id,
+            limit=5,
+        )
+    )
+
+    tool_context_records: list[
+        ConversationToolContextRecord
+    ] = []
+
+    for message in stored_tool_context:
+        if (
+            message.tool_name is None
+            or message.tool_arguments_json is None
+            or message.tool_result_json is None
+        ):
+            raise RuntimeError(
+                "A verified historical tool-result "
+                "message was incomplete."
+            )
+
+        tool_context_records.append(
+            ConversationToolContextRecord(
+                sequence_number=message.sequence_number,
+                tool_name=message.tool_name,
+                validated_arguments_json=dict(
+                    message.tool_arguments_json
+                ),
+                result_json=dict(
+                    message.tool_result_json
+                ),
+            )
+        )
+
+    tool_context_history = tuple(
+        tool_context_records
+    )
+
     await message_service.add_user_message(
         session_id=conversation_session.id,
         content=payload.message,
@@ -220,6 +263,7 @@ async def submit_chat_message(
         session=session,
         context=tool_context,
         conversation_history=conversation_history,
+        tool_context_history=tool_context_history,
     )
 
     completed_at = datetime.now(
@@ -260,6 +304,7 @@ async def submit_chat_message(
             result.successful_tool_call_count
         ),
         tool_executions=result.tool_executions,
+        tool_results=result.tool_results,
     )
 
     metrics_service = ConversationMetricsService(

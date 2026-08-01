@@ -1,15 +1,22 @@
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
-from app.features.events.schemas import EventCreate
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.database.models.event import Event
+from app.features.events.schemas import (
+    EventCreate,
+    EventStatus,
+)
 
 
 class EventRepository:
     """Handle persistence operations for events."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+    ) -> None:
         self._session = session
 
     async def create(
@@ -21,7 +28,9 @@ class EventRepository:
         event_values = event_data.model_dump()
 
         if event_values["event_url"] is not None:
-            event_values["event_url"] = str(event_values["event_url"])
+            event_values["event_url"] = str(
+                event_values["event_url"]
+            )
 
         event = Event(
             organization_id=organization_id,
@@ -48,7 +57,9 @@ class EventRepository:
             Event.department_id == department_id,
         )
 
-        result = await self._session.execute(statement)
+        result = await self._session.execute(
+            statement
+        )
 
         return result.scalar_one_or_none()
 
@@ -60,8 +71,10 @@ class EventRepository:
         statement = (
             select(Event)
             .where(
-                Event.organization_id == organization_id,
-                Event.department_id == department_id,
+                Event.organization_id
+                == organization_id,
+                Event.department_id
+                == department_id,
             )
             .order_by(
                 Event.starts_at.asc(),
@@ -69,9 +82,13 @@ class EventRepository:
             )
         )
 
-        result = await self._session.execute(statement)
+        result = await self._session.execute(
+            statement
+        )
 
-        return list(result.scalars().all())
+        return list(
+            result.scalars().all()
+        )
 
     async def list_upcoming_by_department(
         self,
@@ -80,13 +97,18 @@ class EventRepository:
         starts_from: datetime,
         limit: int = 10,
     ) -> list[Event]:
-        """Return active events starting on or after the supplied date and time."""
+        """
+        Return active department events starting on or after the
+        supplied date and time.
+        """
 
         statement = (
             select(Event)
             .where(
-                Event.organization_id == organization_id,
-                Event.department_id == department_id,
+                Event.organization_id
+                == organization_id,
+                Event.department_id
+                == department_id,
                 Event.status == "active",
                 Event.starts_at >= starts_from,
             )
@@ -97,6 +119,85 @@ class EventRepository:
             .limit(limit)
         )
 
-        result = await self._session.scalars(statement)
+        result = await self._session.scalars(
+            statement
+        )
 
-        return list(result.all())
+        return list(
+            result.all()
+        )
+
+    async def list_by_organization(
+        self,
+        organization_id: int,
+        event_status: EventStatus | None,
+        limit: int,
+        offset: int,
+    ) -> list[Event]:
+        """
+        Return events belonging to an organization.
+
+        A status filter is applied when one is supplied.
+        """
+
+        statement = select(Event).where(
+            Event.organization_id
+            == organization_id,
+        )
+
+        if event_status is not None:
+            statement = statement.where(
+                Event.status == event_status,
+            )
+
+        statement = (
+            statement
+            .order_by(
+                Event.starts_at.asc(),
+                Event.id.asc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+
+        result = await self._session.scalars(
+            statement
+        )
+
+        return list(
+            result.all()
+        )
+
+    async def list_upcoming_by_organization(
+        self,
+        organization_id: int,
+        starts_from: datetime,
+        limit: int,
+    ) -> list[Event]:
+        """
+        Return active organization events starting on or after the
+        supplied date and time.
+        """
+
+        statement = (
+            select(Event)
+            .where(
+                Event.organization_id
+                == organization_id,
+                Event.status == "active",
+                Event.starts_at >= starts_from,
+            )
+            .order_by(
+                Event.starts_at.asc(),
+                Event.id.asc(),
+            )
+            .limit(limit)
+        )
+
+        result = await self._session.scalars(
+            statement
+        )
+
+        return list(
+            result.all()
+        )

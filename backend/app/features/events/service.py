@@ -1,7 +1,9 @@
-from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database.models.event import Event
 from app.features.departments.repository import (
     DepartmentRepository,
 )
@@ -13,7 +15,10 @@ from app.features.events.exceptions import (
     OrganizationNotFoundError,
 )
 from app.features.events.repository import EventRepository
-from app.features.events.schemas import EventCreate
+from app.features.events.schemas import (
+    EventCreate,
+    EventStatus,
+)
 from app.features.organizations.repository import (
     OrganizationRepository,
 )
@@ -30,13 +35,16 @@ class EventService:
         self._organization_repository = OrganizationRepository(session)
         self._department_repository = DepartmentRepository(session)
 
-    async def _verify_organization_and_department(
+    async def _verify_organization(
         self,
         organization_id: int,
-        department_id: int,
     ) -> None:
-        organization = await self._organization_repository.get_by_id(
-            organization_id=organization_id,
+        """Verify that an organization exists and is active."""
+
+        organization = (
+            await self._organization_repository.get_by_id(
+                organization_id=organization_id,
+            )
         )
 
         if organization is None:
@@ -45,9 +53,25 @@ class EventService:
         if organization.status != "active":
             raise OrganizationInactiveError()
 
-        department = await self._department_repository.get_by_id(
+    async def _verify_organization_and_department(
+        self,
+        organization_id: int,
+        department_id: int,
+    ) -> None:
+        """
+        Verify that an organization and one of its departments
+        exist and are active.
+        """
+
+        await self._verify_organization(
             organization_id=organization_id,
-            department_id=department_id,
+        )
+
+        department = (
+            await self._department_repository.get_by_id(
+                organization_id=organization_id,
+                department_id=department_id,
+            )
         )
 
         if department is None:
@@ -98,6 +122,30 @@ class EventService:
             department_id=department_id,
         )
 
+    async def list_organization_events(
+        self,
+        organization_id: int,
+        event_status: EventStatus | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Event]:
+        """
+        Return events belonging to an active organization.
+
+        Results can optionally be filtered by event status.
+        """
+
+        await self._verify_organization(
+            organization_id=organization_id,
+        )
+
+        return await self._event_repository.list_by_organization(
+            organization_id=organization_id,
+            event_status=event_status,
+            limit=limit,
+            offset=offset,
+        )
+
     async def get_event(
         self,
         organization_id: int,
@@ -143,4 +191,34 @@ class EventService:
             department_id=department_id,
             starts_from=local_now,
             limit=limit,
+        )
+
+
+    async def list_upcoming_organization_events(
+        self,
+        organization_id: int,
+        limit: int = 10,
+    ) -> list[Event]:
+        """
+        Return active upcoming events belonging to an active
+        organization.
+        """
+
+        await self._verify_organization(
+            organization_id=organization_id,
+        )
+
+        local_now = datetime.now(
+            ZoneInfo("America/New_York")
+        ).replace(
+            tzinfo=None
+        )
+
+        return await (
+            self._event_repository
+            .list_upcoming_by_organization(
+                organization_id=organization_id,
+                starts_from=local_now,
+                limit=limit,
+            )
         )

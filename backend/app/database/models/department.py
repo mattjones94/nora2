@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
+from app.database.models.resource import Resource
 
 if TYPE_CHECKING:
     from app.database.models.department_detail import DepartmentDetail
@@ -86,6 +87,10 @@ class Department(Base):
     )
     
     details: Mapped["DepartmentDetail | None"] = relationship(
-    back_populates="department",
-    uselist=False,
-)
+        back_populates="department",
+        uselist=False,
+    )
+
+    resources: Mapped[list["Resource"]] = relationship(
+        back_populates="department",
+    )

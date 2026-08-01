@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.conversation.message_repository import (
 )
 from app.conversation.response_contracts import (
     ConversationToolExecutionRecord,
+    ConversationToolResultRecord,
 )
 from app.conversation.tool_execution_repository import (
     ConversationToolExecutionRepository,
@@ -119,17 +121,24 @@ class ConversationMessageService:
         tool_executions: Sequence[
             ConversationToolExecutionRecord
         ] = (),
+        tool_results: Sequence[
+            ConversationToolResultRecord
+        ] = (),
     ) -> ConversationMessage:
         """
-        Store one completed assistant response and its tool audits.
+        Store one completed assistant response, tool results, and audits.
 
-        The assistant message and all associated tool-execution rows
-        are committed atomically. First-token timing remains null until
-        streaming is implemented.
+        The internal tool-result messages, assistant message, and all
+        associated tool-execution rows are committed atomically.
+        First-token timing remains null until streaming is implemented.
         """
 
         execution_records = tuple(
             tool_executions
+        )
+
+        result_records = tuple(
+            tool_results
         )
 
         self._validate_tool_execution_records(
@@ -140,7 +149,34 @@ class ConversationMessageService:
             tool_executions=execution_records,
         )
 
+        self._validate_tool_result_records(
+            successful_tool_call_count=(
+                successful_tool_call_count
+            ),
+            tool_executions=execution_records,
+            tool_results=result_records,
+        )
+
         try:
+            for tool_result in result_records:
+                await self._create_message_in_transaction(
+                    session_id=session_id,
+                    role="tool",
+                    message_type="tool_result",
+                    content=None,
+                    status="completed",
+                    is_user_visible=False,
+                    tool_name=tool_result.tool_name,
+                    tool_arguments_json=dict(
+                        tool_result
+                        .validated_arguments_json
+                    ),
+                    tool_result_json=dict(
+                        tool_result.result_json
+                    ),
+                    completed_at=completed_at,
+                )
+
             (
                 saved_message,
                 organization_id,
@@ -218,6 +254,24 @@ class ConversationMessageService:
             limit=limit,
         )
 
+    async def list_recent_tool_context(
+        self,
+        *,
+        session_id: int,
+        limit: int = 5,
+    ) -> list[ConversationMessage]:
+        """Return recent verified tool results for model context."""
+
+        if limit < 1 or limit > 20:
+            raise ValueError(
+                "limit must be between 1 and 20"
+            )
+
+        return await self._messages.list_recent_tool_context(
+            session_id=session_id,
+            limit=limit,
+        )
+
     async def _create_message_in_transaction(
         self,
         *,
@@ -227,6 +281,9 @@ class ConversationMessageService:
         content: str | None,
         status: str,
         is_user_visible: bool,
+        tool_name: str | None = None,
+        tool_arguments_json: dict[str, Any] | None = None,
+        tool_result_json: dict[str, Any] | None = None,
         provider_name: str | None = None,
         model_name: str | None = None,
         input_tokens: int | None = None,
@@ -267,6 +324,9 @@ class ConversationMessageService:
             message_type=message_type,
             status=status,
             content=content,
+            tool_name=tool_name,
+            tool_arguments_json=tool_arguments_json,
+            tool_result_json=tool_result_json,
             provider_name=provider_name,
             model_name=model_name,
             input_tokens=input_tokens,
@@ -354,6 +414,98 @@ class ConversationMessageService:
                     "and chronological."
                 )
             )
+
+    def _validate_tool_result_records(
+        self,
+        *,
+        successful_tool_call_count: int,
+        tool_executions: tuple[
+            ConversationToolExecutionRecord,
+            ...
+        ],
+        tool_results: tuple[
+            ConversationToolResultRecord,
+            ...
+        ],
+    ) -> None:
+        """Verify retained results match successful execution audits."""
+
+        if (
+            successful_tool_call_count
+            != len(tool_results)
+        ):
+            raise (
+                ConversationMessageToolExecutionMismatchError(
+                    "successful_tool_call_count did not equal "
+                    "the number of retained tool results."
+                )
+            )
+
+        successful_executions = tuple(
+            execution
+            for execution in tool_executions
+            if execution.status == "succeeded"
+        )
+
+        if (
+            len(successful_executions)
+            != len(tool_results)
+        ):
+            raise (
+                ConversationMessageToolExecutionMismatchError(
+                    "successful execution records did not equal "
+                    "the number of retained tool results."
+                )
+            )
+
+        for (
+            tool_result,
+            execution,
+        ) in zip(
+            tool_results,
+            successful_executions,
+            strict=True,
+        ):
+            if (
+                tool_result.execution_order
+                != execution.execution_order
+            ):
+                raise (
+                    ConversationMessageToolExecutionMismatchError(
+                        "a retained tool result did not match "
+                        "its execution order."
+                    )
+                )
+
+            if (
+                tool_result.tool_name
+                != execution.tool_name
+            ):
+                raise (
+                    ConversationMessageToolExecutionMismatchError(
+                        "a retained tool result did not match "
+                        "its execution tool name."
+                    )
+                )
+
+            if execution.validated_arguments_json is None:
+                raise (
+                    ConversationMessageToolExecutionMismatchError(
+                        "a successful execution did not contain "
+                        "validated arguments."
+                    )
+                )
+
+            if (
+                tool_result.validated_arguments_json
+                != execution.validated_arguments_json
+            ):
+                raise (
+                    ConversationMessageToolExecutionMismatchError(
+                        "a retained tool result did not match "
+                        "its execution arguments."
+                    )
+                )
 
     async def _lock_session(
         self,

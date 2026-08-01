@@ -44,6 +44,50 @@ class ConversationToolExecutionRecord:
     frozen=True,
     slots=True,
 )
+class ConversationToolResultRecord:
+    """
+    One validated successful tool result retained for persistence.
+
+    The record contains only provider-neutral registered-tool data.
+    Session, organization, and conversation-message identifiers are
+    added later by the persistence layer from trusted application
+    context.
+    """
+
+    execution_order: int
+
+    tool_name: str
+
+    validated_arguments_json: dict[str, Any]
+
+    result_json: dict[str, Any]
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ConversationToolContextRecord:
+    """
+    One verified historical tool result available to a future turn.
+
+    The sequence number preserves its position in the conversation.
+    Organization scope remains controlled separately by trusted
+    application context and is never derived from this record.
+    """
+
+    sequence_number: int
+
+    tool_name: str
+
+    validated_arguments_json: dict[str, Any]
+
+    result_json: dict[str, Any]
+
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
 class ConversationTurnResult:
     """
     Result produced after the orchestrator completes one user turn.
@@ -67,6 +111,11 @@ class ConversationTurnResult:
 
     tool_executions: tuple[
         ConversationToolExecutionRecord,
+        ...
+    ] = ()
+
+    tool_results: tuple[
+        ConversationToolResultRecord,
         ...
     ] = ()
 

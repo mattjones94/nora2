@@ -1,3 +1,5 @@
+##backend/app/conversation/orchestrator.py
+
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -9,7 +11,9 @@ from app.conversation.response_contracts import (
     ConversationStreamCompleted,
     ConversationStreamEvent,
     ConversationStreamTextDelta,
+    ConversationToolContextRecord,
     ConversationToolExecutionRecord,
+    ConversationToolResultRecord,
     ConversationTurnResult,
     ToolExecutionAttemptPhase,
 )
@@ -137,6 +141,11 @@ class _PreparedSynthesisTurn:
         ...
     ]
 
+    tool_results: tuple[
+        ConversationToolResultRecord,
+        ...
+    ]
+
     has_tool_failures: bool
 
 
@@ -158,6 +167,9 @@ class ConversationOrchestrator:
         conversation_history: Sequence[
             Mapping[str, str]
         ] = (),
+        tool_context_history: Sequence[
+            ConversationToolContextRecord
+        ] = (),
     ) -> ConversationTurnResult:
         """Process one user message within trusted organization scope."""
 
@@ -166,6 +178,7 @@ class ConversationOrchestrator:
             session=session,
             context=context,
             conversation_history=conversation_history,
+            tool_context_history=tool_context_history,
         )
 
         if isinstance(
@@ -187,6 +200,9 @@ class ConversationOrchestrator:
         conversation_history: Sequence[
             Mapping[str, str]
         ] = (),
+        tool_context_history: Sequence[
+            ConversationToolContextRecord
+        ] = (),
     ) -> AsyncIterator[ConversationStreamEvent]:
         """
         Process one turn and stream only public assistant text.
@@ -200,6 +216,7 @@ class ConversationOrchestrator:
             session=session,
             context=context,
             conversation_history=conversation_history,
+            tool_context_history=tool_context_history,
         )
 
         if isinstance(
@@ -324,6 +341,9 @@ class ConversationOrchestrator:
         conversation_history: Sequence[
             Mapping[str, str]
         ] = (),
+        tool_context_history: Sequence[
+            ConversationToolContextRecord
+        ] = (),
     ) -> (
         ConversationTurnResult
         | _PreparedSynthesisTurn
@@ -335,6 +355,23 @@ class ConversationOrchestrator:
         results. Successful tool-backed turns return the normalized
         synthesis work required by either completion delivery mode.
         """
+
+        tool_context_mappings = tuple(
+            {
+                "sequence_number": (
+                    tool_context.sequence_number
+                ),
+                "tool_name": tool_context.tool_name,
+                "validated_arguments_json": dict(
+                    tool_context
+                    .validated_arguments_json
+                ),
+                "result_json": dict(
+                    tool_context.result_json
+                ),
+            }
+            for tool_context in tool_context_history
+        )
 
         tool_catalog = get_tool_catalog()
 
@@ -350,6 +387,7 @@ class ConversationOrchestrator:
             organization_slug=context.organization_slug,
             tool_catalog=tool_catalog,
             conversation_history=conversation_history,
+            tool_context_history=tool_context_mappings,
         )
 
         action_response = await self._client.generate(
@@ -438,6 +476,7 @@ class ConversationOrchestrator:
                     str(initial_error)[:2000]
                 ),
                 conversation_history=conversation_history,
+                tool_context_history=tool_context_mappings,
             )
 
             repair_response = await self._client.generate(
@@ -616,21 +655,104 @@ class ConversationOrchestrator:
                 ),
             )
 
+        batch_execution_records = tuple(
+            tool_executions[
+                -batch_result.tool_call_count:
+            ]
+        )
+
+        if (
+            len(batch_execution_records)
+            != batch_result.tool_call_count
+        ):
+            raise ConversationOrchestrationError(
+                "The tool batch did not have a matching "
+                "set of audit records."
+            )
+
         synthesis_results: list[
             dict[str, object]
         ] = []
 
         successful_tool_names: list[str] = []
 
-        for outcome in batch_result.outcomes:
+        successful_tool_results: list[
+            ConversationToolResultRecord
+        ] = []
+
+        for (
+            outcome,
+            execution_record,
+        ) in zip(
+            batch_result.outcomes,
+            batch_execution_records,
+            strict=True,
+        ):
+            if (
+                outcome.tool_name
+                != execution_record.tool_name
+            ):
+                raise ConversationOrchestrationError(
+                    "A tool outcome did not match its "
+                    "audit-record tool name."
+                )
+
+            if (
+                execution_record
+                .validated_arguments_json
+                is None
+            ):
+                raise ConversationOrchestrationError(
+                    "An executed tool audit did not contain "
+                    "validated arguments."
+                )
+
+            if (
+                dict(
+                    outcome.validated_arguments_json
+                )
+                != dict(
+                    execution_record
+                    .validated_arguments_json
+                )
+            ):
+                raise ConversationOrchestrationError(
+                    "A tool outcome did not match its "
+                    "audited validated arguments."
+                )
+
             if not outcome.succeeded:
+                if (
+                    execution_record.status
+                    == "succeeded"
+                ):
+                    raise ConversationOrchestrationError(
+                        "A failed tool outcome had a successful "
+                        "audit status."
+                    )
+
                 continue
+
+            if (
+                execution_record.status
+                != "succeeded"
+            ):
+                raise ConversationOrchestrationError(
+                    "A successful tool outcome did not have "
+                    "a successful audit status."
+                )
 
             if outcome.result is None:
                 raise ConversationOrchestrationError(
                     "A successful tool outcome did not "
                     "contain a result."
                 )
+
+            result_json = (
+                outcome.result.model_dump(
+                    mode="json",
+                )
+            )
 
             registered_tool = get_registered_tool(
                 tool_name=outcome.tool_name,
@@ -639,11 +761,7 @@ class ConversationOrchestrator:
             synthesis_results.append(
                 {
                     "tool_name": outcome.tool_name,
-                    "tool_result": (
-                        outcome.result.model_dump(
-                            mode="json",
-                        )
-                    ),
+                    "tool_result": result_json,
                     "presentation_guidance": (
                         registered_tool
                         .presentation_guidance
@@ -657,6 +775,23 @@ class ConversationOrchestrator:
 
             successful_tool_names.append(
                 outcome.tool_name
+            )
+
+            successful_tool_results.append(
+                ConversationToolResultRecord(
+                    execution_order=(
+                        execution_record
+                        .execution_order
+                    ),
+                    tool_name=outcome.tool_name,
+                    validated_arguments_json=dict(
+                        outcome
+                        .validated_arguments_json
+                    ),
+                    result_json=dict(
+                        result_json
+                    ),
+                )
             )
 
         if not synthesis_results:
@@ -713,6 +848,9 @@ class ConversationOrchestrator:
             ),
             tool_executions=tuple(
                 tool_executions
+            ),
+            tool_results=tuple(
+                successful_tool_results
             ),
             has_tool_failures=(
                 batch_result.has_failures
@@ -778,6 +916,9 @@ class ConversationOrchestrator:
             ),
             tool_executions=(
                 prepared_turn.tool_executions
+            ),
+            tool_results=(
+                prepared_turn.tool_results
             ),
         )
 
@@ -1134,6 +1275,10 @@ class ConversationOrchestrator:
             ConversationToolExecutionRecord,
             ...
         ] = (),
+        tool_results: tuple[
+            ConversationToolResultRecord,
+            ...
+        ] = (),
     ) -> ConversationTurnResult:
         """Build the final result returned for one conversation turn."""
 
@@ -1159,6 +1304,78 @@ class ConversationOrchestrator:
                 "Successful tool execution records do not "
                 "match the aggregate success count."
             )
+
+        if (
+            successful_tool_call_count
+            != len(tool_results)
+        ):
+            raise ConversationOrchestrationError(
+                "Successful tool results do not match "
+                "the aggregate success count."
+            )
+
+        successful_execution_records = tuple(
+            execution
+            for execution in tool_executions
+            if execution.status == "succeeded"
+        )
+
+        result_execution_orders = tuple(
+            tool_result.execution_order
+            for tool_result in tool_results
+        )
+
+        expected_result_execution_orders = tuple(
+            execution.execution_order
+            for execution in successful_execution_records
+        )
+
+        if (
+            result_execution_orders
+            != expected_result_execution_orders
+        ):
+            raise ConversationOrchestrationError(
+                "Successful tool results are not aligned "
+                "with successful execution records."
+            )
+
+        for (
+            tool_result,
+            execution_record,
+        ) in zip(
+            tool_results,
+            successful_execution_records,
+            strict=True,
+        ):
+            if (
+                tool_result.tool_name
+                != execution_record.tool_name
+            ):
+                raise ConversationOrchestrationError(
+                    "A successful tool result did not match "
+                    "its execution-record tool name."
+                )
+
+            if (
+                execution_record
+                .validated_arguments_json
+                is None
+            ):
+                raise ConversationOrchestrationError(
+                    "A successful execution record did not "
+                    "contain validated arguments."
+                )
+
+            if (
+                tool_result
+                .validated_arguments_json
+                != execution_record
+                .validated_arguments_json
+            ):
+                raise ConversationOrchestrationError(
+                    "A successful tool result did not match "
+                    "its execution-record arguments."
+                )
 
         expected_execution_orders = tuple(
             range(
@@ -1220,6 +1437,7 @@ class ConversationOrchestrator:
                 successful_tool_call_count
             ),
             tool_executions=tool_executions,
+            tool_results=tool_results,
         )
 
     def _sum_usage_field(

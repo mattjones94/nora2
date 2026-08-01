@@ -94,3 +94,48 @@ class ConversationMessageRepository:
         messages.reverse()
 
         return messages
+
+    async def list_recent_tool_context(
+        self,
+        session_id: int,
+        *,
+        limit: int = 5,
+    ) -> list[ConversationMessage]:
+        """
+        Return recent verified internal tool results chronologically.
+
+        The query retrieves the newest bounded rows first and then
+        reverses them so callers receive normal conversation order.
+        """
+
+        statement = (
+            select(
+                ConversationMessage
+            )
+            .where(
+                ConversationMessage.session_id == session_id,
+                ConversationMessage.role == "tool",
+                ConversationMessage.message_type == "tool_result",
+                ConversationMessage.status == "completed",
+                ConversationMessage.is_user_visible.is_(False),
+                ConversationMessage.tool_name.is_not(None),
+                ConversationMessage.tool_arguments_json.is_not(None),
+                ConversationMessage.tool_result_json.is_not(None),
+            )
+            .order_by(
+                ConversationMessage.sequence_number.desc()
+            )
+            .limit(limit)
+        )
+
+        result = await self._session.scalars(
+            statement
+        )
+
+        messages = list(
+            result.all()
+        )
+
+        messages.reverse()
+
+        return messages

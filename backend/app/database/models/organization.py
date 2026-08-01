@@ -1,10 +1,13 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+
 from sqlalchemy import BigInteger, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+
 from app.database.base import Base
+from app.database.models.resource import Resource
 
 if TYPE_CHECKING:
     from app.database.models.conversation_session import (
@@ -59,11 +62,15 @@ class Organization(Base):
     )
 
     departments: Mapped[list["Department"]] = relationship(
-    back_populates="organization",
+        back_populates="organization",
     )
 
     department_details: Mapped[list["DepartmentDetail"]] = relationship(
-    back_populates="organization",
+        back_populates="organization",
+    )
+
+    resources: Mapped[list["Resource"]] = relationship(
+        back_populates="organization",
     )
 
     conversation_sessions: Mapped[

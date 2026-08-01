@@ -9,6 +9,8 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.models.event import Event
+from app.database.session import get_database_session
 from app.features.events.exceptions import (
     DepartmentInactiveError,
     DepartmentNotFoundError,
@@ -20,18 +22,13 @@ from app.features.events.exceptions import (
 from app.features.events.schemas import (
     EventCreate,
     EventResponse,
+    EventStatus,
 )
 from app.features.events.service import EventService
-from app.database.models.event import Event
-from app.database.session import get_database_session
 
 
 router = APIRouter(
-    prefix=(
-        "/organizations/{organization_id}"
-        "/departments/{department_id}"
-        "/events"
-    ),
+    prefix="/organizations/{organization_id}",
     tags=["Admin - Events"],
 )
 
@@ -77,8 +74,83 @@ def translate_event_error(
     )
 
 
+@router.get(
+    "/events",
+    response_model=list[EventResponse],
+)
+async def list_organization_events(
+    organization_id: int,
+    session: DatabaseSession,
+    event_status: Annotated[
+        EventStatus | None,
+        Query(
+            alias="status",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=100,
+        ),
+    ] = 50,
+    offset: Annotated[
+        int,
+        Query(
+            ge=0,
+        ),
+    ] = 0,
+) -> list[Event]:
+    """
+    List events belonging to an organization.
+
+    Results may be filtered by status and paginated with limit
+    and offset.
+    """
+
+    service = EventService(session)
+
+    try:
+        return await service.list_organization_events(
+            organization_id=organization_id,
+            event_status=event_status,
+            limit=limit,
+            offset=offset,
+        )
+    except EventServiceError as error:
+        raise translate_event_error(error) from error
+
+
+@router.get(
+    "/events/upcoming",
+    response_model=list[EventResponse],
+)
+async def list_upcoming_organization_events(
+    organization_id: int,
+    session: DatabaseSession,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=50,
+        ),
+    ] = 25,
+) -> list[Event]:
+    """List active upcoming events belonging to an organization."""
+
+    service = EventService(session)
+
+    try:
+        return await service.list_upcoming_organization_events(
+            organization_id=organization_id,
+            limit=limit,
+        )
+    except EventServiceError as error:
+        raise translate_event_error(error) from error
+
+
 @router.post(
-    "",
+    "/departments/{department_id}/events",
     response_model=EventResponse,
     status_code=status.HTTP_201_CREATED,
 )
@@ -103,7 +175,7 @@ async def create_event(
 
 
 @router.get(
-    "",
+    "/departments/{department_id}/events",
     response_model=list[EventResponse],
 )
 async def list_events(
@@ -124,9 +196,8 @@ async def list_events(
         raise translate_event_error(error) from error
 
 
-
 @router.get(
-    "/upcoming",
+    "/departments/{department_id}/events/upcoming",
     response_model=list[EventResponse],
 )
 async def list_upcoming_events(
@@ -156,7 +227,7 @@ async def list_upcoming_events(
 
 
 @router.get(
-    "/{event_id}",
+    "/departments/{department_id}/events/{event_id}",
     response_model=EventResponse,
 )
 async def get_event(
